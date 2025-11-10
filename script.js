@@ -1,225 +1,189 @@
-// Contact form handler - Sends form data to AWS Lambda
-const LAMBDA_URL = 'https://qijmbjbb26uh273zxckc5shfwi0hvtva.lambda-url.us-east-1.on.aws/'; // Replace with your Function URL
+// Updated script.js — defensive and compatible with updated HTML/CSS
 
-// Your WebSocket API configuration from Challenge 6
+const LAMBDA_URL = 'https://qijmbjbb26uh273zxckc5shfwi0hvtva.lambda-url.us-east-1.on.aws/';
 const WEBSOCKET_URL = 'wss://9x0grhrp7g.execute-api.us-east-1.amazonaws.com/production/';
 
 let socket = null;
 let isConnected = false;
-let isMinimized = false;
 let messageQueue = [];
+let reconnectTimer = null;
 
-// WebSocket Connection Management
+function safeGet(id) {
+    return document.getElementById(id);
+}
+
+function updateConnectionStatus(status) {
+    const s = safeGet('connectionStatus');
+    if (!s) return;
+    s.textContent = status;
+    s.style.color = status === 'Connected' ? '#9AE6B4' : (status === 'Connecting...' ? '#FBBF24' : '#F87171');
+}
+
+function displayMessage(content, role) {
+    const container = safeGet('chatMessages');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = `message ${role === 'user' ? 'user-message' : 'assistant-message'}`;
+    el.textContent = content;
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+}
+
+function showTypingIndicator() {
+    if (safeGet('typingIndicator')) return;
+    const container = safeGet('chatMessages');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.id = 'typingIndicator';
+    el.className = 'typing-indicator';
+    el.textContent = '🤔 Thinking...';
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+}
+
+function hideTypingIndicator() {
+    const el = safeGet('typingIndicator');
+    if (el) el.remove();
+}
+
 function connectToWebSocket() {
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
     try {
         updateConnectionStatus('Connecting...');
-        
-        // Create WebSocket connection to your existing API Gateway
         socket = new WebSocket(WEBSOCKET_URL);
-        
+
         socket.onopen = () => {
-            console.log('Connected to WebSocket API');
-            updateConnectionStatus('Connected');
             isConnected = true;
-            
-            // Process any queued messages
-            while (messageQueue.length > 0) {
-                const queuedMessage = messageQueue.shift();
-                socket.send(JSON.stringify(queuedMessage));
+            updateConnectionStatus('Connected');
+            while (messageQueue.length) {
+                const msg = messageQueue.shift();
+                try { socket.send(JSON.stringify(msg)); } catch (e) { console.warn('send queue failed', e); break; }
             }
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         };
-        
-        socket.onmessage = (event) => {
+
+        socket.onmessage = (evt) => {
             try {
-                const response = JSON.parse(event.data);
-                console.log('Received:', response);
-                
-                // Handle different message types from your Challenge 6 API
-                if (response.type === 'chunk' && response.content) {
-                    displayMessage(response.content, 'assistant');
+                const data = JSON.parse(evt.data);
+                if (data.type === 'chunk' && data.content) {
+                    displayMessage(data.content, 'assistant');
                     hideTypingIndicator();
-                } else if (response.type === 'end') {
-                    // Response complete
+                } else if (data.type === 'end') {
                     hideTypingIndicator();
-                } else if (response.type === 'error') {
+                } else if (data.type === 'error') {
                     hideTypingIndicator();
-                    displayMessage('Sorry, I encountered an error processing your message.', 'assistant');
+                    displayMessage('Error processing request.', 'assistant');
+                } else {
+                    // fallback
+                    displayMessage(typeof data === 'string' ? data : JSON.stringify(data), 'assistant');
                 }
-            } catch (error) {
-                console.error('Error parsing message:', error);
-                hideTypingIndicator();
+            } catch (err) {
+                console.error('Invalid WS message', err);
             }
         };
-        
-        socket.onclose = (evt) => {
-            console.log('WebSocket closed:', evt.reason);
+
+        socket.onclose = () => {
             isConnected = false;
             updateConnectionStatus('Disconnected');
-            
-            // Attempt to reconnect after 3 seconds
-            setTimeout(connectToWebSocket, 3000);
+            if (!reconnectTimer) {
+                reconnectTimer = setTimeout(() => { reconnectTimer = null; connectToWebSocket(); }, 3000);
+            }
         };
-        
-        socket.onerror = (error) => {
-            console.error('WebSocket error:', error);
+
+        socket.onerror = (err) => {
+            console.error('WS error', err);
             updateConnectionStatus('Error');
             isConnected = false;
         };
-        
-    } catch (error) {
-        console.error('Connection error:', error);
+
+    } catch (err) {
+        console.error('WS connect failed', err);
         updateConnectionStatus('Failed');
     }
 }
 
-// Chat Interface Functions
 function sendMessage() {
-    const input = document.getElementById('chatInput');
-    const message = input.value.trim();
-    
-    if (!message) return;
-    
-    // Display user message immediately
-    displayMessage(message, 'user');
-    showTypingIndicator();
-    
-    // Clear input
+    const input = safeGet('chatInput');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    displayMessage(text, 'user');
     input.value = '';
-    
-    // Prepare message in the format your Challenge 6 Lambda expects
-    const messageData = {
-        messages: [
-            { role: "user", content: message }
-        ]
-    };
-    
-    // Send message through WebSocket
-    if (isConnected && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(messageData));
+    showTypingIndicator();
+
+    const payload = { messages: [{ role: 'user', content: text }] };
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        try { socket.send(JSON.stringify(payload)); }
+        catch (err) { messageQueue.push(payload); connectToWebSocket(); }
     } else {
-        // Queue message if not connected
-        messageQueue.push(messageData);
-        updateConnectionStatus('Reconnecting...');
+        messageQueue.push(payload);
         connectToWebSocket();
     }
 }
 
-function displayMessage(content, role) {
-    const messagesContainer = document.getElementById('chatMessages');
-    const messageDiv = document.createElement('div');
-    
-    messageDiv.className = `message ${role}-message`;
-    messageDiv.textContent = content;
-    
-    messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function showTypingIndicator() {
-    const messagesContainer = document.getElementById('chatMessages');
-    const typingDiv = document.createElement('div');
-    
-    typingDiv.className = 'typing-indicator';
-    typingDiv.id = 'typingIndicator';
-    typingDiv.textContent = '🤔 Thinking...';
-    
-    messagesContainer.appendChild(typingDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function hideTypingIndicator() {
-    const typingIndicator = document.getElementById('typingIndicator');
-    if (typingIndicator) {
-        typingIndicator.remove();
-    }
-}
-
-function updateConnectionStatus(status) {
-    const statusElement = document.getElementById('connectionStatus');
-    statusElement.textContent = status;
-    
-    // Add visual indicators
-    statusElement.style.color = status === 'Connected' ? '#90EE90' : 
-                              status === 'Connecting...' ? '#FFD700' : '#FF6B6B';
-}
-
 function toggleChat() {
-    const chatContainer = document.getElementById('chatContainer');
-    isMinimized = !isMinimized;
-    
-    if (isMinimized) {
-        chatContainer.classList.add('minimized');
-    } else {
-        chatContainer.classList.remove('minimized');
-    }
+    const container = safeGet('chatContainer');
+    if (!container) return;
+    container.classList.toggle('minimized');
 }
 
-function handleKeyPress(event) {
-    if (event.key === 'Enter') {
-        sendMessage();
-    }
+// Enter to send (simple)
+function handleKeyPress(e) {
+    if (e.key === 'Enter') sendMessage();
 }
 
-// Initialize connection when page loads
+/* Contact form handling */
 document.addEventListener('DOMContentLoaded', () => {
     connectToWebSocket();
-});
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'chatInput') { sendMessage(); } });
 
+    const form = document.querySelector('.contact-form-container') || safeGet('contactForm');
+    if (form) {
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+            const submitBtn = document.querySelector('.contact-submit-btn') || safeGet('contactSubmitBtn');
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Sending...'; }
 
-document.addEventListener('DOMContentLoaded', function() {
-    const form = document.querySelector('.contact-form-container');
+            const nameField = form.querySelector('[name="name"]');
+            const emailField = form.querySelector('[name="email"]');
+            const messageField = form.querySelector('[name="message"]');
 
-    form.addEventListener('submit', async function(e) {
-        e.preventDefault();
+            const payload = {
+                name: nameField ? nameField.value : '',
+                email: emailField ? emailField.value : '',
+                message: messageField ? messageField.value : ''
+            };
 
-        const submitBtn = form.querySelector('.contact-submit-btn');
-        const messageDiv = document.getElementById('form-message');
+            try {
+                const res = await fetch(LAMBDA_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
 
-        // Show loading state
-        submitBtn.textContent = 'Sending...';
-        submitBtn.disabled = true;
-        messageDiv.style.display = 'none';
-
-        // Get form data
-        const formData = {
-            name: form.name.value,
-            email: form.email.value,
-            message: form.message.value
-        };
-
-        try {
-            const response = await fetch(LAMBDA_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(formData)
-            });
-
-            if (response.ok) {
-                showMessage('Message sent successfully! Thank you for reaching out.', 'success');
-                form.reset();
-            } else {
-                showMessage('Failed to send message. Please try again.', 'error');
+                if (res.ok) {
+                    showMessage('Message sent successfully!', 'success');
+                    form.reset();
+                } else {
+                    showMessage('Failed to send message.', 'error');
+                }
+            } catch (err) {
+                console.error('Network error', err);
+                showMessage('Network error. Try again later.', 'error');
+            } finally {
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Send Message'; }
             }
-        } catch (error) {
-            showMessage('Network error. Please check your connection and try again.', 'error');
-        }
-
-        // Reset button
-        submitBtn.textContent = 'Send Message';
-        submitBtn.disabled = false;
-    });
+        });
+    }
 });
 
 function showMessage(text, type) {
-    const messageDiv = document.getElementById('form-message');
-    messageDiv.textContent = text;
-    messageDiv.className = `form-message ${type}`;
-    messageDiv.style.display = 'block';
-
-    // Auto-hide after 10 seconds
-    setTimeout(() => {
-        messageDiv.style.display = 'none';
-    }, 10000);
+    const m = safeGet('form-message');
+    if (!m) return;
+    m.textContent = text;
+    m.className = `form-message ${type}`;
+    m.style.display = 'block';
+    setTimeout(() => { m.style.display = 'none'; }, 9000);
 }
