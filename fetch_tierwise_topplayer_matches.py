@@ -233,10 +233,34 @@ def main(event, context):
         MATCH_BASE = f"https://{REGION}.api.riotgames.com"
 
         # tiers to iterate (kept from your original list; adjust if necessary)
-        # TIERS = ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER']
-        TIERS = ['MASTER', 'GRANDMASTER', 'CHALLENGER']
+        TIERS = ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER']
 
         # Helper functions
+        def fetch_top_champion_masteries(encrypted_summoner_id: str, top_n: int = 5) -> List[Dict]:
+            """
+            Return top N champion mastery summaries for the summoner (encrypted summoner id).
+            Each item: { championId, championLevel, championPoints, lastPlayTime, chestGranted (if present) }
+            """
+            
+            try:
+                url = f"{LEAGUE_BASE}/lol/champion-mastery/v4/champion-masteries/by-summoner/{encrypted_summoner_id}"
+                data = safe_get(url) or []
+                result = []
+                for m in data[:top_n]:
+                    result.append({
+                        "championId": m.get("championId"),
+                        "championLevel": m.get("championLevel"),
+                        "championPoints": m.get("championPoints"),
+                        "lastPlayTime": m.get("lastPlayTime"),
+                        "chestGranted": m.get("chestGranted", False)
+                    })
+                time.sleep(1.25)
+                return result
+            except Exception as e:
+                print(f"[warn] failed to fetch masteries for {encrypted_summoner_id}: {e}")
+                return []
+
+
         def safe_get(url: str, params: Dict = None, max_retries=4, backoff=1.2):
             for attempt in range(max_retries):
                 r = SESSION.get(url, params=params, timeout=12)
@@ -278,6 +302,7 @@ def main(event, context):
         
         def fetch_entries_page(page: int, tier: str, division: str) -> List[Dict]:
 
+            time.sleep(1.25)
             tier_upper = (tier or "").upper()
             division_upper = (division or "").upper()
 
@@ -313,7 +338,7 @@ def main(event, context):
         seen_puuids = set()
 
         for tier in TIERS:
-            if tier in ('MASTER', 'GRANDMASTER', 'CHALLENGER'):
+            if tier in ("Master", "Grandmaster", "Challenger"):
                 divisions = ["I"]
             else:
                 divisions = ["IV", "III", "II", "I"]
@@ -322,13 +347,11 @@ def main(event, context):
                 for page in range(1, PAGES + 1):
                     print(f"Fetching entries page {page} for {tier} {division}...")
                     entries = fetch_entries_page(page, tier, division)
-                    if isinstance(entries, dict):
-                        entries = entries.get('entries', []) or []
+                    time.sleep(0.25)
                     if not isinstance(entries, list):
                         print(f"Unexpected response for entries page {page}: {type(entries)} - skipping")
                         continue
-                    time.sleep(0.25)
-                    
+
                     # select top unique players from page
                     top_entries = []
                     for e in entries:
@@ -344,44 +367,35 @@ def main(event, context):
 
                     for entry in top_entries:
                         puuid = entry.get("puuid")
-                        # fallback to summonerId if puuid absent: you'd need to call Summoner API to convert (not included here)
                         if not puuid:
                             print("No PUUID in entry; skipping (convert using Summoner API if required).")
                             continue
 
-                        summ_info = {"entry": entry, "recent_matches": []}
-                        try:
-                            match_ids = fetch_recent_match_ids(puuid, count=3)
-                            print(f"   {puuid[:8]}... -> matches found: {len(match_ids)}")
+                        # Use the encrypted summoner id present in the entry for champion-mastery endpoint.
+                        # Riot's entries typically include 'summonerId' (encryptedSummonerId); prefer that.
+                        enc_summoner_id = entry.get("summonerId") or entry.get("encryptedSummonerId") or entry.get("summonerId")
 
-                            summoner_name = None
+                        summ_info = {"entry": entry, "top_champions": []}
+                        try:
+                            # Fetch top 5 champion masteries (minimal change)
+                            if enc_summoner_id:
+                                top_masteries = fetch_top_champion_masteries(enc_summoner_id, top_n=5)
+                                summ_info["top_champions"] = top_masteries
+                            else:
+                                print(f"   no encrypted summoner id for {puuid}; skipping masteries fetch")
+
+                            # optional: capture a display name for file key (use entry data)
+                            summoner_name = entry.get("summonerName") or entry.get("playerOrTeamName") or puuid[:8]
                             LP = entry.get("leaguePoints", "unknown")
 
-                            for i, match_id in enumerate(match_ids):
-                                print(f"    Processing match {i+1}/{len(match_ids)}: {match_id}")
-                                match_data = fetch_match(match_id)
-                                # polite pause to reduce likelihood of rate limiting
-                                time.sleep(1.25)
-                                if not match_data:
-                                    print(f"     match {match_id} not found -> skipping")
-                                    continue
-
-                                player_stats = extract_player_stats(match_data, puuid)
-                                if player_stats:
-                                    match_processed += 1
-                                    summ_info['recent_matches'].append(player_stats)
-                                    # retain summoner name for storage key if present
-                                    if not summoner_name:
-                                        summoner_name = player_stats.get('summonerName') or player_stats.get('championName') or puuid[:8]
-
-                            # save per-player summary to S3
+                            # Save per-player summary (entry + top_champions) to S3 under same key scheme
                             safe_name = (summoner_name or puuid[:8]).replace("/", "_")
                             stats_key = f"match-history/{tier}/{division}/{LP}/{safe_name}.json"
                             save_to_s3(stats_key, summ_info)
-                            print(f"   Saved stats for {puuid} to s3://{bucket_name}/{stats_key}")
+                            print(f"   Saved profile for {puuid} to s3://{bucket_name}/{stats_key}")
 
                         except Exception as ex:
-                            print(f"   Error fetching matches for {puuid}: {ex}")
+                            print(f"   Error fetching profile for {puuid}: {ex}")
 
         return {
             'statusCode': 200,
