@@ -186,6 +186,7 @@ def main(event, context):
 
     # Configuration - UPDATE THIS WITH YOUR BUCKET NAME OR PASS IN EVENT
     bucket_name = event.get('s3_bucket', 'rift-rewind-rag-ai-documents')
+    SLEEP_BETWEEN_REQUESTS = 1.25
 
     try:
         PAGES = int(event.get('top_page', 3))
@@ -211,6 +212,7 @@ def main(event, context):
         s3 = boto3.client('s3')
         http = urllib3.PoolManager()
 
+        
         QUEUE = "RANKED_SOLO_5x5"
         # League base uses platform-specific host
         LEAGUE_BASE = f"https://{PLATFORM}.api.riotgames.com"
