@@ -5,7 +5,177 @@ import boto3
 import urllib3
 from typing import List, Dict
 
-def lambda_handler(event, context):
+def extract_player_stats(match_data: Dict, puuid: str) -> Dict:
+    """
+    Extract a comprehensive list of player stats (raw + derived) for the participant with given puuid.
+    Returns None if the participant is not found.
+    """
+
+    try:
+        info = match_data.get('info', {})
+        metadata = match_data.get('metadata', {})
+        participants = info.get('participants', [])
+        if not participants:
+            return None
+
+        # find player participant and determine team participants
+        player = None
+        for p in participants:
+            if p.get('puuid') == puuid:
+                player = p
+                break
+        if not player:
+            return None
+
+        # derive team totals (kills, damage, damageTaken) for player's team
+        team_id = player.get('teamId')
+        team_participants = [p for p in participants if p.get('teamId') == team_id]
+        enemy_participants = [p for p in participants if p.get('teamId') != team_id]
+
+        team_total_kills = sum(p.get('kills', 0) for p in team_participants)
+        team_total_damage = sum(p.get('totalDamageDealtToChampions', 0) for p in team_participants)
+        team_total_damage_taken = sum(p.get('totalDamageTaken', 0) for p in team_participants)
+
+        # helper to read nested 'challenges' safely
+        challenges = player.get('challenges', {}) or {}
+
+        # core raw values (with safe defaults)
+        kills = int(player.get('kills', 0))
+        deaths = int(player.get('deaths', 0))
+        assists = int(player.get('assists', 0))
+        total_damage = int(player.get('totalDamageDealtToChampions', 0))
+        total_damage_taken = int(player.get('totalDamageTaken', 0))
+        gold_earned = int(player.get('goldEarned', 0))
+        vision_score = int(player.get('visionScore', 0))
+        total_minions = int(player.get('totalMinionsKilled', 0))
+        neutral_minions = int(player.get('neutralMinionsKilled', 0))
+        time_ccing = float(player.get('timeCCingOthers', player.get('timeCCingOthers', 0)) or 0)
+
+        # game duration in seconds -> convert to minutes for per-minute stats (avoid division by zero)
+        game_duration_sec = info.get('gameDuration') or 0
+        game_duration_min = max(game_duration_sec / 60.0, 1/60.0)
+
+        # derived metrics
+        kda = (kills + assists) / max(1, deaths)
+        gold_per_min = gold_earned / game_duration_min
+        damage_per_min = total_damage / game_duration_min
+        vision_score_per_min = vision_score / game_duration_min
+
+        team_damage_pct = (total_damage / team_total_damage * 100.0) if team_total_damage > 0 else 0.0
+        damage_taken_team_pct = (total_damage_taken / team_total_damage_taken * 100.0) if team_total_damage_taken > 0 else 0.0
+
+        kill_participation = ((kills + assists) / team_total_kills) if team_total_kills > 0 else 0.0
+
+        # champion / positional fields
+        champion_name = player.get('championName')
+        team_position = player.get('teamPosition') or player.get('individualPosition') or "UNKNOWN"
+        win = bool(player.get('win', False))
+
+        # gather objective stats (prefer participant root fields, fallback to challenges)
+        turret_takedowns = int(player.get('turretTakedowns', 0) or challenges.get('turretTakedowns', 0))
+        dragon_kills = int(player.get('dragonKills', 0) or challenges.get('dragonTakedowns', 0) or challenges.get('dragonKills', 0))
+        baron_kills = int(player.get('baronKills', 0) or challenges.get('baronTakedowns', 0) or challenges.get('baronKills', 0))
+        objective_stolen = int(player.get('objectiveStolen', 0) or challenges.get('objectiveStolen', 0))
+        objective_stolen_assists = int(player.get('objectivesStolenAssists', 0) or challenges.get('objectivesStolenAssists', 0))
+
+        # early-game and micro metrics from challenges (many of these come from Riot's "challenges" object)
+        lane_minions_first_10 = challenges.get('laneMinionsFirst10Minutes') or challenges.get('laneMinionsFirst10Minutes', 0)
+        gold_per_min_challenge = challenges.get('goldPerMinute') or gold_per_min
+        damage_per_min_challenge = challenges.get('damagePerMinute') or damage_per_min
+        kills_under_own_turret = challenges.get('killsUnderOwnTurret') or 0
+        kills_near_enemy_turret = challenges.get('killsNearEnemyTurret') or 0
+        takedowns_before_jungle_spawn = challenges.get('takedownsBeforeJungleMinionSpawn') or 0
+        first_blood_kill = bool(player.get('firstBloodKill', False) or challenges.get('firstBloodKill', False))
+        first_tower_kill = bool(player.get('firstTowerKill', False) or challenges.get('firstTowerKill', False))
+
+        # optional: fields that sometimes exist in participant for vision/wards
+        wards_placed = int(player.get('wardsPlaced', 0) or challenges.get('wardsPlaced', 0))
+        wards_killed = int(player.get('wardsKilled', 0) or challenges.get('wardsKilled', 0))
+        vision_score_total = vision_score  # alias
+
+        # kills under turret fields if present in participant root (some versions provide them)
+        kills_under_own_turret = int(player.get('killsUnderOwnTurret', kills_under_own_turret) or kills_under_own_turret)
+        kills_near_enemy_turret = int(player.get('killsNearEnemyTurret', kills_near_enemy_turret) or kills_near_enemy_turret)
+
+        # additional interesting signals: team participation in objectives
+        team_turret_takedowns = sum(int(p.get('turretTakedowns', 0) or p.get('challenges', {}).get('turretTakedowns', 0)) for p in team_participants)
+        team_dragon_kills = sum(int(p.get('dragonKills', 0) or p.get('challenges', {}).get('dragonTakedowns', 0)) for p in team_participants)
+        team_baron_kills = sum(int(p.get('baronKills', 0) or p.get('challenges', {}).get('baronTakedowns', 0)) for p in team_participants)
+
+        # create final stats dictionary containing requested fields
+        stats = {
+            # identifiers & game meta
+            'matchId': metadata.get('matchId'),
+            'gameCreation': info.get('gameCreation'),
+            'gameDuration': game_duration_sec,
+            'gameMode': info.get('gameMode'),
+            'queueId': info.get('queueId'),
+            'puuid': puuid,
+            'summonerName': player.get('summonerName', None),
+
+            # core identifiers
+            'championName': champion_name,
+            'teamPosition': team_position,
+            'win': win,
+
+            # combat & performance
+            'kills': kills,
+            'deaths': deaths,
+            'assists': assists,
+            'kda': round(kda, 3),
+            'totalDamageDealtToChampions': total_damage,
+            'totalDamageTaken': total_damage_taken,
+            'damagePerMinute': round(damage_per_min, 2),
+            'damageTakenOnTeamPercentage': round(damage_taken_team_pct, 2),
+            'teamDamagePercentage': round(team_damage_pct, 2),
+            'killParticipation': round(kill_participation, 3),
+            'timeCCingOthers': round(time_ccing, 2),
+
+            # economy & objective impact
+            'goldEarned': gold_earned,
+            'goldPerMinute': round(gold_per_min, 2),
+            'turretTakedowns': turret_takedowns,
+            'dragonKills': dragon_kills,
+            'baronKills': baron_kills,
+            'objectiveStolen': objective_stolen,
+            'objectiveStolenAssists': objective_stolen_assists,
+
+            # vision & micro
+            'visionScore': vision_score_total,
+            'visionScorePerMinute': round(vision_score_per_min, 3),
+            'wardsPlaced': wards_placed,
+            'wardsKilled': wards_killed,
+
+            # laning & minions
+            'totalMinionsKilled': total_minions,
+            'neutralMinionsKilled': neutral_minions,
+            'laneMinionsFirst10Minutes': lane_minions_first_10,
+
+            # optional/clutch indicators
+            'killsUnderOwnTurret': kills_under_own_turret,
+            'killsNearEnemyTurret': kills_near_enemy_turret,
+            'takedownsBeforeJungleMinionSpawn': takedowns_before_jungle_spawn,
+            'firstBloodKill': first_blood_kill,
+            'firstTowerKill': first_tower_kill,
+
+            # team context
+            'teamTotalKills': team_total_kills,
+            'teamTotalDamage': team_total_damage,
+            'teamTotalDamageTaken': team_total_damage_taken,
+            'teamTurretTakedowns': team_turret_takedowns,
+            'teamDragonKills': team_dragon_kills,
+            'teamBaronKills': team_baron_kills,
+        }
+
+        return stats
+
+    except Exception as e:
+        print(f"Error extracting player stats: {e}")
+        return None
+
+
+
+def main(event, context):
     """
     Fetches League of Legends match history for top players tierwise and stores summarized player stats in S3.
     Expected event keys:
@@ -220,171 +390,14 @@ def lambda_handler(event, context):
         traceback.print_exc()
         return {'statusCode': 500, 'error': str(e)}
 
-
-def extract_player_stats(match_data: Dict, puuid: str) -> Dict:
-    """
-    Extract a comprehensive list of player stats (raw + derived) for the participant with given puuid.
-    Returns None if the participant is not found.
-    """
-
-    try:
-        info = match_data.get('info', {})
-        metadata = match_data.get('metadata', {})
-        participants = info.get('participants', [])
-        if not participants:
-            return None
-
-        # find player participant and determine team participants
-        player = None
-        for p in participants:
-            if p.get('puuid') == puuid:
-                player = p
-                break
-        if not player:
-            return None
-
-        # derive team totals (kills, damage, damageTaken) for player's team
-        team_id = player.get('teamId')
-        team_participants = [p for p in participants if p.get('teamId') == team_id]
-        enemy_participants = [p for p in participants if p.get('teamId') != team_id]
-
-        team_total_kills = sum(p.get('kills', 0) for p in team_participants)
-        team_total_damage = sum(p.get('totalDamageDealtToChampions', 0) for p in team_participants)
-        team_total_damage_taken = sum(p.get('totalDamageTaken', 0) for p in team_participants)
-
-        # helper to read nested 'challenges' safely
-        challenges = player.get('challenges', {}) or {}
-
-        # core raw values (with safe defaults)
-        kills = int(player.get('kills', 0))
-        deaths = int(player.get('deaths', 0))
-        assists = int(player.get('assists', 0))
-        total_damage = int(player.get('totalDamageDealtToChampions', 0))
-        total_damage_taken = int(player.get('totalDamageTaken', 0))
-        gold_earned = int(player.get('goldEarned', 0))
-        vision_score = int(player.get('visionScore', 0))
-        total_minions = int(player.get('totalMinionsKilled', 0))
-        neutral_minions = int(player.get('neutralMinionsKilled', 0))
-        time_ccing = float(player.get('timeCCingOthers', player.get('timeCCingOthers', 0)) or 0)
-
-        # game duration in seconds -> convert to minutes for per-minute stats (avoid division by zero)
-        game_duration_sec = info.get('gameDuration') or 0
-        game_duration_min = max(game_duration_sec / 60.0, 1/60.0)
-
-        # derived metrics
-        kda = (kills + assists) / max(1, deaths)
-        gold_per_min = gold_earned / game_duration_min
-        damage_per_min = total_damage / game_duration_min
-        vision_score_per_min = vision_score / game_duration_min
-
-        team_damage_pct = (total_damage / team_total_damage * 100.0) if team_total_damage > 0 else 0.0
-        damage_taken_team_pct = (total_damage_taken / team_total_damage_taken * 100.0) if team_total_damage_taken > 0 else 0.0
-
-        kill_participation = ((kills + assists) / team_total_kills) if team_total_kills > 0 else 0.0
-
-        # champion / positional fields
-        champion_name = player.get('championName')
-        team_position = player.get('teamPosition') or player.get('individualPosition') or "UNKNOWN"
-        win = bool(player.get('win', False))
-
-        # gather objective stats (prefer participant root fields, fallback to challenges)
-        turret_takedowns = int(player.get('turretTakedowns', 0) or challenges.get('turretTakedowns', 0))
-        dragon_kills = int(player.get('dragonKills', 0) or challenges.get('dragonTakedowns', 0) or challenges.get('dragonKills', 0))
-        baron_kills = int(player.get('baronKills', 0) or challenges.get('baronTakedowns', 0) or challenges.get('baronKills', 0))
-        objective_stolen = int(player.get('objectiveStolen', 0) or challenges.get('objectiveStolen', 0))
-        objective_stolen_assists = int(player.get('objectivesStolenAssists', 0) or challenges.get('objectivesStolenAssists', 0))
-
-        # early-game and micro metrics from challenges (many of these come from Riot's "challenges" object)
-        lane_minions_first_10 = challenges.get('laneMinionsFirst10Minutes') or challenges.get('laneMinionsFirst10Minutes', 0)
-        gold_per_min_challenge = challenges.get('goldPerMinute') or gold_per_min
-        damage_per_min_challenge = challenges.get('damagePerMinute') or damage_per_min
-        kills_under_own_turret = challenges.get('killsUnderOwnTurret') or 0
-        kills_near_enemy_turret = challenges.get('killsNearEnemyTurret') or 0
-        takedowns_before_jungle_spawn = challenges.get('takedownsBeforeJungleMinionSpawn') or 0
-        first_blood_kill = bool(player.get('firstBloodKill', False) or challenges.get('firstBloodKill', False))
-        first_tower_kill = bool(player.get('firstTowerKill', False) or challenges.get('firstTowerKill', False))
-
-        # optional: fields that sometimes exist in participant for vision/wards
-        wards_placed = int(player.get('wardsPlaced', 0) or challenges.get('wardsPlaced', 0))
-        wards_killed = int(player.get('wardsKilled', 0) or challenges.get('wardsKilled', 0))
-        vision_score_total = vision_score  # alias
-
-        # kills under turret fields if present in participant root (some versions provide them)
-        kills_under_own_turret = int(player.get('killsUnderOwnTurret', kills_under_own_turret) or kills_under_own_turret)
-        kills_near_enemy_turret = int(player.get('killsNearEnemyTurret', kills_near_enemy_turret) or kills_near_enemy_turret)
-
-        # additional interesting signals: team participation in objectives
-        team_turret_takedowns = sum(int(p.get('turretTakedowns', 0) or p.get('challenges', {}).get('turretTakedowns', 0)) for p in team_participants)
-        team_dragon_kills = sum(int(p.get('dragonKills', 0) or p.get('challenges', {}).get('dragonTakedowns', 0)) for p in team_participants)
-        team_baron_kills = sum(int(p.get('baronKills', 0) or p.get('challenges', {}).get('baronTakedowns', 0)) for p in team_participants)
-
-        # create final stats dictionary containing requested fields
-        stats = {
-            # identifiers & game meta
-            'matchId': metadata.get('matchId'),
-            'gameCreation': info.get('gameCreation'),
-            'gameDuration': game_duration_sec,
-            'gameMode': info.get('gameMode'),
-            'queueId': info.get('queueId'),
-            'puuid': puuid,
-            'summonerName': player.get('summonerName', None),
-
-            # core identifiers
-            'championName': champion_name,
-            'teamPosition': team_position,
-            'win': win,
-
-            # combat & performance
-            'kills': kills,
-            'deaths': deaths,
-            'assists': assists,
-            'kda': round(kda, 3),
-            'totalDamageDealtToChampions': total_damage,
-            'totalDamageTaken': total_damage_taken,
-            'damagePerMinute': round(damage_per_min, 2),
-            'damageTakenOnTeamPercentage': round(damage_taken_team_pct, 2),
-            'teamDamagePercentage': round(team_damage_pct, 2),
-            'killParticipation': round(kill_participation, 3),
-            'timeCCingOthers': round(time_ccing, 2),
-
-            # economy & objective impact
-            'goldEarned': gold_earned,
-            'goldPerMinute': round(gold_per_min, 2),
-            'turretTakedowns': turret_takedowns,
-            'dragonKills': dragon_kills,
-            'baronKills': baron_kills,
-            'objectiveStolen': objective_stolen,
-            'objectiveStolenAssists': objective_stolen_assists,
-
-            # vision & micro
-            'visionScore': vision_score_total,
-            'visionScorePerMinute': round(vision_score_per_min, 3),
-            'wardsPlaced': wards_placed,
-            'wardsKilled': wards_killed,
-
-            # laning & minions
-            'totalMinionsKilled': total_minions,
-            'neutralMinionsKilled': neutral_minions,
-            'laneMinionsFirst10Minutes': lane_minions_first_10,
-
-            # optional/clutch indicators
-            'killsUnderOwnTurret': kills_under_own_turret,
-            'killsNearEnemyTurret': kills_near_enemy_turret,
-            'takedownsBeforeJungleMinionSpawn': takedowns_before_jungle_spawn,
-            'firstBloodKill': first_blood_kill,
-            'firstTowerKill': first_tower_kill,
-
-            # team context
-            'teamTotalKills': team_total_kills,
-            'teamTotalDamage': team_total_damage,
-            'teamTotalDamageTaken': team_total_damage_taken,
-            'teamTurretTakedowns': team_turret_takedowns,
-            'teamDragonKills': team_dragon_kills,
-            'teamBaronKills': team_baron_kills,
-        }
-
-        return stats
-
-    except Exception as e:
-        print(f"Error extracting player stats: {e}")
-        return None
+if __name__ == "__main__":
+    # For local testing, you can define a sample event and context
+    sample_event = {
+        'top_page': 3,
+        'top_player': 15,
+        'platform': 'JP1',
+        's3_bucket': 'rift-rewind-rag-ai-documents'  # replace with your bucket name
+    }
+    sample_context = {}
+    result = main(sample_event, sample_context)
+    print(result)
