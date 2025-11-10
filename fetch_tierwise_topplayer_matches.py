@@ -260,6 +260,32 @@ def main(event, context):
                 print(f"[warn] failed to fetch masteries for {encrypted_summoner_id}: {e}")
                 return []
 
+                # put this near other helper functions inside main() or module-level
+        PUUID_TO_SUMMONER_CACHE = {}  # simple in-memory cache for this run
+
+        def fetch_summoner_by_puuid(puuid):
+            """
+            Return encryptedSummonerId (summonerId) for the given puuid using summoner-v4.
+            Caches results to avoid repeated calls.
+            """
+            if not puuid:
+                return None
+            if puuid in PUUID_TO_SUMMONER_CACHE:
+                return PUUID_TO_SUMMONER_CACHE[puuid]
+
+            try:
+                url = f"{LEAGUE_BASE}/lol/summoner/v4/summoners/by-puuid/{puuid}"
+                data = safe_get(url)
+                # throttle after Riot call
+                time.sleep(SLEEP_BETWEEN_REQUESTS)
+                if data and isinstance(data, dict):
+                    enc_id = data.get("id") or data.get("summonerId") or data.get("accountId")
+                    PUUID_TO_SUMMONER_CACHE[puuid] = enc_id
+                    return enc_id
+            except Exception as e:
+                print(f"[warn] fetch_summoner_by_puuid failed for {puuid}: {e}")
+            return None
+
 
         def safe_get(url: str, params: Dict = None, max_retries=4, backoff=1.2):
             for attempt in range(max_retries):
@@ -373,7 +399,15 @@ def main(event, context):
 
                         # Use the encrypted summoner id present in the entry for champion-mastery endpoint.
                         # Riot's entries typically include 'summonerId' (encryptedSummonerId); prefer that.
-                        enc_summoner_id = entry.get("summonerId") or entry.get("encryptedSummonerId") or entry.get("summonerId")
+                        # enc_summoner_id = entry.get("summonerId") or entry.get("encryptedSummonerId") or entry.get("summonerId")
+
+                        # replace with:
+                        enc_summoner_id = entry.get("summonerId") or entry.get("encryptedSummonerId")
+                        if not enc_summoner_id:
+                            # fallback: convert puuid -> summoner id
+                            enc_summoner_id = fetch_summoner_by_puuid(puuid)
+                            if not enc_summoner_id:
+                                print(f"   no encrypted summoner id for {puuid}; skipping masteries fetch")
 
                         summ_info = {"entry": entry, "top_champions": []}
                         try:
