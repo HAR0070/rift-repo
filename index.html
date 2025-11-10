@@ -1,114 +1,160 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>HAR00 - Personal Website</title>
-    <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Preview — Blue Hue + Center Panel</title>
+<style>
+  :root{
+    --bg-deep: #041226;    /* deep blue-black */
+    --panel-dark-1: rgba(5,12,28,0.86);
+    --panel-dark-2: rgba(6,20,42,0.88);
+    --accent-1: #1e90ff;
+    --accent-2: #4f46e5;
+    --muted: #9fb7d5;
+    --radius: 12px;
+  }
+
+  /* reset */
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: var(--bg-deep);
+    color: #e6eef8;
+  }
+
+  /* Full-page background image layer */
+  .bg-layer{
+    position:fixed; inset:0; z-index:0;
+    background-image: url("assets/bg/main.jpg");
+    background-size: cover;
+    background-position: center center;
+    background-repeat: no-repeat;
+    filter: saturate(0.95) contrast(1.02) brightness(0.82);
+    transition: opacity .3s ease;
+    pointer-events:none;
+  }
+
+  /* Optional vignette to emphasize center */
+  .bg-layer::after{
+    content:"";
+    position:absolute; inset:0;
+    background: radial-gradient(60% 60% at 50% 50%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.28) 55%, rgba(0,0,0,0.6) 100%);
+    mix-blend-mode:multiply;
+    pointer-events:none;
+  }
+
+  /* Center dark panel (80% width, full height) */
+  .center-panel{
+    position:relative; z-index:10;
+    width:80vw; max-width:1600px; min-width:680px;
+    height:100vh; margin:0 auto;
+    display:flex; flex-direction:column;
+    padding:30px;
+    background: linear-gradient(180deg, var(--panel-dark-1) 0%, var(--panel-dark-2) 40%, rgba(4,12,30,0.92) 100%);
+    border-radius: var(--radius);
+    box-shadow: 0 30px 90px rgba(2,10,30,0.7), inset 0 1px 0 rgba(255,255,255,0.02);
+    backdrop-filter: blur(6px) saturate(1.05);
+    border: 1px solid rgba(255,255,255,0.03);
+    overflow:auto;
+  }
+
+  /* Layout inside center panel */
+  header.site-head{
+    display:flex; align-items:center; gap:12px; margin-bottom:18px;
+  }
+  .profile-photo{width:52px;height:52px;border-radius:8px;object-fit:cover;border:2px solid rgba(255,255,255,0.04)}
+  .title { font-size:18px; color:var(--accent-1); font-weight:700; }
+  .subtitle { font-size:13px; color:var(--muted); margin-top:4px; }
+
+  /* Main content area where you'll show stats */
+  .content {
+    flex:1;
+    display:block;
+    margin-top:12px;
+    color:#e6eef8;
+  }
+  .content .placeholder {
+    min-height:380px;
+    border-radius:10px;
+    border:1px dashed rgba(255,255,255,0.04);
+    background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));
+    padding:18px;
+  }
+
+  /* Chat container pinned right (still present) */
+  .chat {
+    position:fixed; right:0; top:0; bottom:0; z-index:20;
+    width:30vw; max-width:520px; min-width:320px;
+    background: linear-gradient(180deg, rgba(10,10,12,0.92), rgba(18,16,20,0.98));
+    border-left:1px solid rgba(255,255,255,0.02);
+    box-shadow: -24px 0 80px rgba(0,0,0,0.7);
+    display:flex; flex-direction:column;
+    border-top-left-radius:12px; border-bottom-left-radius:12px;
+    overflow:hidden;
+  }
+  .chat-header{padding:14px 16px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.02)}
+  .chat-messages{flex:1;padding:16px; overflow:auto; background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00))}
+  .chat-input{padding:12px;border-top:1px solid rgba(255,255,255,0.02); display:flex; gap:8px}
+  .chat-input input{flex:1;padding:10px;border-radius:8px;border:none;background:rgba(255,255,255,0.03);color:#e6eef8}
+
+  /* contact form small and below fold — keep it compact */
+  .contact { max-width:700px; margin:38px auto 60px auto; padding:16px; background:transparent }
+
+  /* Responsive fallbacks */
+  @media (max-width:980px){
+    .center-panel{ width:calc(100% - 32px); min-width:auto; margin:16px; height:auto; padding:20px; border-radius:12px }
+    .chat{ position:fixed; left:6%; right:6%; width:auto; height:50vh; bottom:12px; top:auto; border-radius:12px }
+    .bg-layer::after{ background: radial-gradient(60% 60% at 50% 42%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.45) 45%, rgba(0,0,0,0.7) 100%); }
+  }
+</style>
 </head>
 <body>
-    <!-- Gameplay background: drop images into assets/bg/ named 1.jpg, 2.jpg, 3.jpg (or change CSS) -->
-    <div class="gameplay-bg" aria-hidden="true"></div>
-        <!-- center panel (80% width, full height) -->
-    <div class="center-panel">
-    <main>
-        <!-- Keep your existing content here (lead-block, spacer, contact form) -->
-        <section class="lead-block">
-        <h2>Projects · Cloud · Ground Effect Plane</h2>
-        <p>Engineer-minded notes, experiments and progress updates.</p>
-        <a class="cta-button" href="#projects">View Projects</a>
-        </section>
+  <!-- background image: replace assets/bg/main.jpg with your file -->
+  <div class="bg-layer" aria-hidden="true"></div>
 
-        <div class="spacer" aria-hidden="true"></div>
-
-        <section class="contact-form" id="contactFormSection">
-        <!-- existing contact form markup -->
-        </section>
-    </main>
-    </div>
-
-    <header class="site-header">
-        <div class="small-hero">
-            <img src="profile-photo.svg" alt="HAR00" class="profile-photo" />
-            <div class="small-hero-text">
-                <h1>HAR00</h1>
-                <p class="tagline">AWS Builder</p>
-            </div>
-        </div>
+  <!-- Center panel: 80% width, full height -->
+  <div class="center-panel" role="main" aria-label="Main stats area">
+    <header class="site-head" aria-hidden="false">
+      <img class="profile-photo" src="profile-photo.svg" alt="profile" />
+      <div>
+        <div class="title">HAR00</div>
+        <div class="subtitle">AWS Builder · Ground Effect Plane</div>
+      </div>
     </header>
 
-    <main>
-        <!-- Main content placeholder; the 'Get In Touch' section is intentionally far down (scroll to reach) -->
-        <section class="lead-block">
-            <h2>Projects · Cloud · Ground Effect Plane</h2>
-            <p>Engineer-minded notes, experiments and progress updates.</p>
-            <a class="cta-button" href="#projects">View Projects</a>
-        </section>
+    <section class="content">
+      <div class="placeholder">
+        <h2>Player stats area (placeholder)</h2>
+        <p>This central column is intentionally dark and semi-transparent with a blue hue. Replace this placeholder with your stats UI (charts, tables, etc.).</p>
+      </div>
 
-        <!-- spacer forces scrolling so contact form is reachable only by scrolling -->
-        <div class="spacer" aria-hidden="true"></div>
+      <!-- lots of vertical space to simulate content and allow scrolling to contact -->
+      <div style="height:60vh"></div>
 
-        <!-- CONTACT FORM SECTION - kept small and below the fold -->
-        <section class="contact-form" id="contactFormSection">
-            <h3>Get In Touch</h3>
-            <p>Questions, collabs or quick notes — drop a message.</p>
-            <div id="form-message" class="form-message" style="display:none;"></div>
+      <section class="contact">
+        <h3>Get In Touch</h3>
+        <p>Compact contact form below (you'll add your form markup here in your project).</p>
+      </section>
+    </section>
+  </div>
 
-            <form class="contact-form-container" id="contactForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="name">Name</label>
-                        <input type="text" id="name" name="name" required />
-                    </div>
-
-                    <div class="form-group">
-                        <label for="email">Email</label>
-                        <input type="email" id="email" name="email" required />
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="message">Message</label>
-                    <textarea id="message" name="message" rows="5" required></textarea>
-                </div>
-
-                <button type="submit" class="contact-submit-btn">Send Message</button>
-            </form>
-        </section>
-    </main>
-
-    <!-- Chat (full-height, right 30%) -->
-    <div class="chat-container" id="chatContainer" aria-live="polite">
-        <div class="chat-header" onclick="toggleChat()" id="chatHeader">
-            <div class="chat-title">🎮 League Expert Chat</div>
-            <div class="connection-status" id="connectionStatus">Connecting...</div>
-        </div>
-
-        <div class="chat-messages" id="chatMessages" role="log" aria-atomic="false">
-            <div class="message assistant-message">
-                👋 Hi! I'm your League of Legends expert. Ask me about stats, champions, items, builds, or any game mechanics!
-            </div>
-        </div>
-
-        <div class="chat-input-container" id="chatInputContainer">
-            <input
-                type="text"
-                class="chat-input"
-                id="chatInput"
-                placeholder="Ask about League of Legends..."
-                onkeypress="handleKeyPress(event)"
-                aria-label="Chat input"
-            />
-            <button class="chat-send-btn" id="chatSendBtn" onclick="sendMessage()" aria-label="Send">
-                ➤
-            </button>
-        </div>
+  <!-- Chat UI pinned to right (keeps earlier behavior) -->
+  <aside class="chat" aria-label="Chat">
+    <div class="chat-header">
+      <div>🎮 League Chat</div>
+      <div style="color:var(--muted);font-size:13px">Connecting...</div>
     </div>
 
-    <footer>
-        <p>&copy; 2025 HAR0070. Built with ❤️ on AWS</p>
-    </footer>
+    <div class="chat-messages" id="chatMessages">
+      <div style="background:rgba(255,255,255,0.04);padding:10px;border-radius:10px;display:inline-block">Assistant: Hello!</div>
+    </div>
 
-    <script src="script.js"></script>
+    <div class="chat-input">
+      <input id="chatInput" placeholder="Ask about League..." aria-label="Chat input" />
+      <button style="background:var(--accent-1);border:none;padding:10px 12px;border-radius:8px;color:#021225">Send</button>
+    </div>
+  </aside>
 </body>
 </html>
