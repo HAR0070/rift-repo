@@ -233,7 +233,8 @@ def main(event, context):
         MATCH_BASE = f"https://{REGION}.api.riotgames.com"
 
         # tiers to iterate (kept from your original list; adjust if necessary)
-        TIERS = ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER']
+        # TIERS = ['BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER']
+        TIERS = ['MASTER', 'GRANDMASTER', 'CHALLENGER']
 
         # Helper functions
         def safe_get(url: str, params: Dict = None, max_retries=4, backoff=1.2):
@@ -312,7 +313,7 @@ def main(event, context):
         seen_puuids = set()
 
         for tier in TIERS:
-            if tier in ("Master", "Grandmaster", "Challenger"):
+            if tier in ('MASTER', 'GRANDMASTER', 'CHALLENGER'):
                 divisions = ["I"]
             else:
                 divisions = ["IV", "III", "II", "I"]
@@ -321,11 +322,13 @@ def main(event, context):
                 for page in range(1, PAGES + 1):
                     print(f"Fetching entries page {page} for {tier} {division}...")
                     entries = fetch_entries_page(page, tier, division)
-                    time.sleep(0.25)
+                    if isinstance(entries, dict):
+                        entries = entries.get('entries', []) or []
                     if not isinstance(entries, list):
                         print(f"Unexpected response for entries page {page}: {type(entries)} - skipping")
                         continue
-
+                    time.sleep(0.25)
+                    
                     # select top unique players from page
                     top_entries = []
                     for e in entries:
